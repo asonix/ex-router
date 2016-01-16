@@ -40,7 +40,7 @@ defmodule Router.Manager.Routes do
     Agent.update(routes, fn list ->
       ins = unzip(list)
       Enum.filter(imports, fn {node_name, _cores} ->
-        (not node_name in ins) and (not node_name == node)
+        (not node_name in ins) and (not (node_name == node))
       end) ++ list
     end)
   end
@@ -48,8 +48,14 @@ defmodule Router.Manager.Routes do
   @doc """
   Adds a `node_pair` of the format {name, cores} to the `routes`.
   """
-  def add_node(routes, node_pair) do
-    Agent.update(routes, &(insert_node(&1, node_pair)))
+  def add_node(routes, node_pair, parent) do
+    Agent.update(routes, fn list ->
+      {status, nlist} = insert_node(list, node_pair)
+      if status == :new do
+        send(parent, {:new, node_pair, self()})
+      end
+      nlist
+    end)
   end
 
   @doc """
@@ -90,15 +96,18 @@ defmodule Router.Manager.Routes do
 
   # Returns a list of node names from the `routes`.
   defp unzip(list) do
-    Enum.each(list, fn {node_name, _cores} -> node_name end)
+    Enum.map(list, fn {node_name, _cores} -> node_name end)
   end
 
   # Replaces or inserts a node.
-  defp insert_node([], new_node), do: [new_node]
+  defp insert_node([], new_node), do: {:new, [new_node]}
   defp insert_node([current_node|rest], {name, _cores} = new_node) do
     case current_node do
-      {^name, _} -> [new_node|rest]
-      _ -> [current_node|insert_node(rest, new_node)]
+      {^name, _} ->
+        {:ok, [new_node|rest]}
+      _ ->
+        {status, list} = insert_node(rest, new_node)
+        {status, [current_node|list]}
     end
   end
 

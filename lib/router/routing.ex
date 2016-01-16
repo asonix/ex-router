@@ -31,7 +31,6 @@ defmodule Router.Routing do
   Specify a node to execute a command on.
   """
   def direct(node_name, mod, fun, args, retry \\ false,id \\ 0) do
-    require Logger
     if node_name == node do
       apply(mod, fun, args)
     else

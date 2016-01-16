@@ -24,6 +24,13 @@ defmodule Router.Manager do
   end
 
   @doc """
+  Imports nodes from list.
+  """
+  def import_nodes(manager, list) do
+    GenServer.cast(manager, {:import, list})
+  end
+
+  @doc """
   Returns the name of a node that is routable.
   """
   def get_route(manager, id) do
@@ -98,8 +105,7 @@ defmodule Router.Manager do
   Returns all nodes.
   """
   def handle_call({:all_nodes}, _from, routes) do
-    {:reply, Routes.export(Map.get(routes, :good))
-             ++ Routes.export(Map.get(routes, :bad)), routes}
+    {:reply, all_nodes(routes), routes}
   end
 
   @doc """
@@ -107,6 +113,14 @@ defmodule Router.Manager do
   """
   def handle_cast({:state, state}, routes) do
     {:noreply, Map.put(routes, :state, state)}
+  end
+
+  @doc """
+  Imports nodes from list.
+  """
+  def handle_cast({:import, list}, routes) do
+    Map.get(routes, :bad) |> Routes.import(list)
+    {:noreply, routes}
   end
 
   @doc """
@@ -142,6 +156,17 @@ defmodule Router.Manager do
   end
 
   @doc """
+  Sends new node current node info.
+  """
+  def handle_info({:new, {node_name, _cores}, pid}, routes) do
+    if pid == Map.get(routes, :good) do
+      Router.Routing.direct(node_name, Router.Manager, :import_nodes,
+                            [Router.Manager, all_nodes(routes)])
+    end
+    {:noreply, routes}
+  end
+
+  @doc """
   Does nothing on unimportant handle_info calls.
   """
   def handle_info(_msg, routes) do
@@ -150,13 +175,17 @@ defmodule Router.Manager do
 
   ## Helpers
 
+  defp all_nodes(routes) do
+    Routes.export(Map.get(routes, :good)) ++ Routes.export(Map.get(routes, :bad))
+  end
+
   defp node_is_up(routes, node_name, cores) do
     Routes.remove_node(Map.get(routes, :bad), node_name)
-    Routes.add_node(Map.get(routes, :good), {node_name, cores})
+    Routes.add_node(Map.get(routes, :good), {node_name, cores}, self())
   end
 
   defp node_is_down(routes, node_name, cores) do
     Routes.remove_node(Map.get(routes, :good), node_name)
-    Routes.add_node(Map.get(routes, :bad), {node_name, cores})
+    Routes.add_node(Map.get(routes, :bad), {node_name, cores}, self())
   end
 end
