@@ -1,6 +1,5 @@
 defmodule Router.Timer do
   use GenServer
-  # use Timex
 
   ## API
 

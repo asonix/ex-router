@@ -29,6 +29,6 @@ defmodule Router.Mixfile do
   #
   # Type "mix help deps" for more examples and options
   defp deps do
-    [{:timex, github: "bitwalker/timex"}]
+    []
   end
 end
