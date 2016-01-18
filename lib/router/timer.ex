@@ -53,7 +53,7 @@ defmodule Router.Timer do
 
   # Sends `:tick` to the `Router.Timer` after a second.
   defp start_timer(state) do
-    :erlang.send_after(1000, self(), {:tick, state}, [])
+    Process.send_after(self(), {:tick, state}, 1000)
   end
 
 end

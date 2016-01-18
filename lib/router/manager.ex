@@ -10,6 +10,18 @@ defmodule Router.Manager do
     GenServer.start_link(__MODULE__, :ok, name: name)
   end
 
+  def ping(manager) do
+    require Logger
+    try do
+      {:pong} = GenServer.call(manager, {:ping})
+      :up
+    catch
+      reason ->
+        Logger.info "Reason: #{reason}"
+        :down
+    end
+  end
+
   @doc """
   Checks the state of the current node.
 
@@ -28,6 +40,7 @@ defmodule Router.Manager do
   """
   def import_nodes(manager, list) do
     GenServer.cast(manager, {:import, list})
+    {:ok, true}
   end
 
   @doc """
@@ -81,6 +94,10 @@ defmodule Router.Manager do
     br = Process.monitor(bad)
 
     {:ok, %{good: good, bad: bad, state: :up, gref: gr, bref: br}}
+  end
+
+  def handle_call({:ping}, _from, routes) do
+    {:reply, {:pong}, routes}
   end
 
   @doc """
@@ -160,8 +177,10 @@ defmodule Router.Manager do
   """
   def handle_info({:new, {node_name, _cores}, pid}, routes) do
     if pid == Map.get(routes, :good) do
-      Router.Routing.direct(node_name, Router.Manager, :import_nodes,
-                            [Router.Manager, all_nodes(routes)])
+      if (length good_nodes(routes)) > 2 do
+        Router.Routing.direct(node_name, Router.Manager, :import_nodes,
+                              [Router.Manager, all_nodes(routes)])
+      end
     end
     {:noreply, routes}
   end
@@ -176,7 +195,15 @@ defmodule Router.Manager do
   ## Helpers
 
   defp all_nodes(routes) do
-    Routes.export(Map.get(routes, :good)) ++ Routes.export(Map.get(routes, :bad))
+    good_nodes(routes) ++ bad_nodes(routes)
+  end
+
+  defp good_nodes(routes) do
+    Routes.export(Map.get(routes, :good))
+  end
+
+  defp bad_nodes(routes) do
+    Routes.export(Map.get(routes, :bad))
   end
 
   defp node_is_up(routes, node_name, cores) do
