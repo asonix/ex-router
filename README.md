@@ -1,5 +1,7 @@
 # Router
 
+_Most of this functionality is provided by Elixir itself. I need to read up on how much of the code I have here is actually useful_
+
 An elixir package to select routes to nodes based on availability and number of cores.
 
 Outline:
