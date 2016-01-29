@@ -190,7 +190,7 @@ defmodule Router.Manager do
   @doc """
   Sends new node current node info.
   """
-  def handle_info({:new, {node_name, _cores}, pid}, routes) do
+  def handle_info({:new, node_name}, routes) do
     if pid == Map.get(routes, :good) do
       if (length good_nodes(routes)) > 2 do
         Router.Routing.direct(node_name, Router.Manager, :import_nodes,
@@ -222,12 +222,13 @@ defmodule Router.Manager do
   end
 
   defp node_is_up(routes, node_name, cores) do
+    Routes.send_if_new(Map.get(routes, :good), node_name, self())
     Routes.remove_node(Map.get(routes, :bad), node_name)
-    Routes.add_node(Map.get(routes, :good), {node_name, cores}, self())
+    Routes.add_node(Map.get(routes, :good), {node_name, cores})
   end
 
   defp node_is_down(routes, node_name, cores) do
     Routes.remove_node(Map.get(routes, :good), node_name)
-    Routes.add_node(Map.get(routes, :bad), {node_name, cores}, self())
+    Routes.add_node(Map.get(routes, :bad), {node_name, cores})
   end
 end
