@@ -16,6 +16,12 @@
 defmodule Router.Manager do
   use GenServer
 
+  ## Misc
+
+  def cores() do
+    :erlang.system_info(:logical_processors_available)
+  end
+
   ## API
 
   @doc """
@@ -25,14 +31,16 @@ defmodule Router.Manager do
     GenServer.start_link(__MODULE__, :ok, name: name)
   end
 
+  @doc """
+  Pings the GenServer, reponds `:up` or `:down`
+  """
   def ping(manager) do
     require Logger
     try do
       {:pong} = GenServer.call(manager, {:ping})
       :up
     catch
-      reason ->
-        Logger.info "Reason: #{reason}"
+      _ ->
         :down
     end
   end
@@ -43,19 +51,15 @@ defmodule Router.Manager do
   result is either `:up` or `:down`.
   """
   def check_state(manager) do
-    cores = :erlang.system_info(:logical_processors_available)
-    GenServer.call(manager, {:state, node, cores})
-  end
-  def check_state(manager, node_name, cores) do
-    GenServer.call(manager, {:state, node_name, cores})
+    GenServer.call(manager, {:state})
   end
 
   @doc """
   Imports nodes from list.
   """
-  def import_nodes(manager, list) do
-    GenServer.cast(manager, {:import, list})
-    {:ok, true}
+  def import_nodes(manager, map) do
+    GenServer.cast(manager, {:import, map})
+    {:ok, cores()}
   end
 
   @doc """
@@ -68,15 +72,15 @@ defmodule Router.Manager do
   @doc """
   Returns list of all nodes.
   """
-  def get_all_nodes(manager) do
-    GenServer.call(manager, {:all_nodes})
+  def get_nodes(manager) do
+    GenServer.call(manager, {:nodes})
   end
 
   @doc """
   States whether a node is offline or online.
   """
-  def update_node(manager, node_name, cores, state) do
-    GenServer.cast(manager, {:node_state, state, node_name, cores})
+  def update_node(manager, node_name, state) do
+    GenServer.cast(manager, {:node_state, state, node_name})
   end
 
   @doc """
@@ -99,105 +103,86 @@ defmodule Router.Manager do
   alias Router.Manager.Routes
 
   @doc """
-  Initialize the Genserver with a map of good, bad,
+  Initialize the Genserver with a map of routes pid
   and the current state
   """
   def init(:ok) do
-    {:ok, good} = Routes.Supervisor.start_routes()
-    {:ok, bad}  = Routes.Supervisor.start_routes()
-    gr = Process.monitor(good)
-    br = Process.monitor(bad)
+    {:ok, pid} = Routes.Supervisor.start_routes()
+    monitor = Process.monitor(good)
 
-    {:ok, %{good: good, bad: bad, state: :up, gref: gr, bref: br}}
+    {:ok, %{pid: pid, state: :up, monitor: monitor}}
   end
 
-  def handle_call({:ping}, _from, routes) do
-    {:reply, {:pong}, routes}
+  def handle_call({:ping}, _from, manager) do
+    {:reply, {:pong}, manager}
   end
 
   @doc """
-  If calling node is not in `:good`, put it there.
+  If calling node is not in routes process, put it there.
 
   returns `:up` or `:down`.
   """
-  def handle_call({:state, node_name, cores}, _from, routes) do
-    node_is_up(routes, node_name, cores)
-
-    {:reply, Map.get(routes, :state), routes}
+  def handle_call({:state}, _from, manager) do
+    {:reply, Map.get(manager, :state), manager}
   end
 
   @doc """
   Returns name of route that is up.
   """
-  def handle_call({:route, id}, _from, routes) do
-    {:reply, Routes.select(Map.get(routes, :good), id), routes}
+  def handle_call({:route, id}, _from, manager) do
+    {:reply, Routes.select(Map.get(manager, :pid), id), manager}
   end
 
   @doc """
   Returns all nodes.
   """
-  def handle_call({:all_nodes}, _from, routes) do
-    {:reply, all_nodes(routes), routes}
+  def handle_call({:nodes}, _from, manager) do
+    {:reply, nodes(manager), manager}
   end
 
   @doc """
   Sets the state of the current node.
   """
-  def handle_cast({:state, state}, routes) do
-    {:noreply, Map.put(routes, :state, state)}
+  def handle_cast({:state, state}, manager) do
+    Map.get(manager, :pid)
+    |> Routes.broadcast(Router.Manager,
+                        :update_node,
+                        [Router.Manager, node(), state])
+    {:noreply, Map.put(manager, :state, state)}
   end
 
   @doc """
-  Imports nodes from list.
+  Imports nodes from map.
   """
-  def handle_cast({:import, list}, routes) do
-    Map.get(routes, :bad) |> Routes.import(list)
-    {:noreply, routes}
+  def handle_cast({:import, map}, manager) do
+    Map.get(manager, :pid) |> Routes.import(map)
+    {:noreply, manager}
   end
 
   @doc """
   Sets the perceived state of another node.
   """
-  def handle_cast({:node_state, state, node_name, cores}, routes) do
+  def handle_cast({:node_state, state, node_name, cores}, manager) do
     case state do
-      :up -> node_is_up(routes, node_name, cores)
-      :down -> node_is_down(routes, node_name, cores)
+      :up -> node_is_up(manager, node_name)
+      :down -> node_is_down(manager, node_name)
     end
 
-    {:noreply, routes}
+    {:noreply, manager}
   end
 
   @doc """
   Restarts the routes if they go down.
   """
-  def handle_info({:DOWN, ref, :process, _pid, _reason}, routes) do
-    cond do
-      ref == Map.get(routes, :gref) ->
-        good = Routes.Supervisor.start_routes
-        gr = Process.monitor(good)
-        uroutes = Map.put(routes, :good, good)
-        {:noreply, Map.put(uroutes, :gref, gr)}
-      ref == Map.get(routes, :bref) ->
-        bad = Routes.Supervisor.start_routes
-        br = Process.monitor(bad)
-        uroutes = Map.put(routes, :bad, bad)
-        {:noreply, Map.put(uroutes, :bref, br)}
-      true ->
-        {:noreply, routes}
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, manager) do
+    if ref == Map.get(manager, :monitor) do
+      {:ok, pid} = Routes.Supervisor.start_routes()
+      monitor = Process.monitor(pid)
+      umanager = manager |> Map.put(:pid, pid) |> Map.put(:monitor, monitor)
+      {:noreply, umanager}
+    else
+      {:noreply, manager}
     end
-  end
-
-  @doc """
-  Sends new node current node info.
-  """
-  def handle_info({:new, node_name}, routes) do
-    if pid == Map.get(routes, :good) do
-      if (length good_nodes(routes)) > 2 do
-        Router.Routing.direct(node_name, Router.Manager, :import_nodes,
-                              [Router.Manager, all_nodes(routes)])
-      end
-    end
-    {:noreply, routes}
   end
 
   @doc """
@@ -209,26 +194,19 @@ defmodule Router.Manager do
 
   ## Helpers
 
-  defp all_nodes(routes) do
-    good_nodes(routes) ++ bad_nodes(routes)
+  defp nodes(manager) do
+    Map.get(manager, :pid)
+    |> Routes.export()
   end
 
-  defp good_nodes(routes) do
-    Routes.export(Map.get(routes, :good))
+  defp node_is_up(manager, node_name) do
+    Map.get(manager, :pid)
+    |> Routes.send_if_new(node_name)
+    |> Routes.add_node({node_name})
   end
 
-  defp bad_nodes(routes) do
-    Routes.export(Map.get(routes, :bad))
-  end
-
-  defp node_is_up(routes, node_name, cores) do
-    Routes.send_if_new(Map.get(routes, :good), node_name, self())
-    Routes.remove_node(Map.get(routes, :bad), node_name)
-    Routes.add_node(Map.get(routes, :good), {node_name, cores})
-  end
-
-  defp node_is_down(routes, node_name, cores) do
-    Routes.remove_node(Map.get(routes, :good), node_name)
-    Routes.add_node(Map.get(routes, :bad), {node_name, cores})
+  defp node_is_down(manager, node_name) do
+    Map.get(manager, :pid)
+    |> Routes.remove_node(node_name)
   end
 end

@@ -43,6 +43,16 @@ defmodule Router.Manager.Routes do
   end
 
   @doc """
+  Send message to all nodes.
+  """
+  def broadcast(routes, mod, fun, args) do
+    export(routes)
+    |> Enum.each(fn {node_name, cores} ->
+      Router.Routing.direct(node_name, mod, fun, args)
+    end)
+  end
+
+  @doc """
   Returns the list of nodes from `routes`.
   """
   def export(routes) do
@@ -72,6 +82,7 @@ defmodule Router.Manager.Routes do
     Agent.update(routes, fn map ->
       Map.put(map, node_name, cores)
     end)
+    routes
   end
 
   @doc """
@@ -79,20 +90,25 @@ defmodule Router.Manager.Routes do
   """
   def remove_node(routes, name) do
     Agent.update(routes, &Map.pop(&1, name))
+    routes
   end
 
   @doc """
   Returns `true` if `node_name` is present in `routes`.
   """
-  def send_if_new(routes, name) do
-    Agent.get(routes, fn map ->
-      if not Map.has_key?(map, name) do
-        Router.Routing.direct(node_name,
-                              Router.Manager,
-                              :import_nodes,
-                              [Router.Manager, export(routes)])
+  def send_if_new(routes, node_name) do
+    Agent.update(routes, fn map ->
+      if not Map.has_key?(map, node_name) do
+        {:ok, cores} = Router.Routing.direct(node_name,
+                                             Router.Manager,
+                                             :import_nodes,
+                                             [Router.Manager, export(routes)])
+        Map.put(map, node_name, cores)
+      else
+        map
       end
     end)
+    routes
   end
 
   ## Helpers
@@ -105,9 +121,11 @@ defmodule Router.Manager.Routes do
 
   # connect to and get number of cores from remote node
   defp get_cores(node_name) do
-    Node.connect(current_node)
-    # return cores
-    4 # for your health
+    Node.connect(node_name)
+    Router.Routing.direct(node_name,
+                          Router.Manager,
+                          :cores,
+                          [])
   end
 
   # expand_routes converts the routes list to an expanded form based on
